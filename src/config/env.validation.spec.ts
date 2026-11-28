@@ -66,10 +66,48 @@ describe('assertValidEnvironment', () => {
     }
   });
 
+  it('defaults the API-key grace period to 24 hours and caps it at 30 days', () => {
+    expect(assertValidEnvironment({ ...REQUIRED_ENV }).API_KEY_ROTATION_GRACE_PERIOD_SECONDS).toBe(86400);
+    expect(
+      assertValidEnvironment({
+        ...REQUIRED_ENV,
+        API_KEY_ROTATION_GRACE_PERIOD_SECONDS: '2592000',
+      }).API_KEY_ROTATION_GRACE_PERIOD_SECONDS,
+    ).toBe(2592000);
+
+    for (const value of ['0', '-1', '2592001', 'invalid']) {
+      const error = validationError({
+        ...REQUIRED_ENV,
+        API_KEY_ROTATION_GRACE_PERIOD_SECONDS: value,
+      });
+      expect(error.issues.map((issue) => issue.key)).toContain(
+        'API_KEY_ROTATION_GRACE_PERIOD_SECONDS',
+      );
+    }
+  });
+
   it('accepts a positive webhook retry limit and rejects zero', () => {
     expect(assertValidEnvironment({ ...REQUIRED_ENV, WEBHOOK_MAX_ATTEMPTS: '3' }).WEBHOOK_MAX_ATTEMPTS).toBe(3);
     const error = validationError({ ...REQUIRED_ENV, WEBHOOK_MAX_ATTEMPTS: '0' });
     expect(error.issues.map((issue) => issue.key)).toContain('WEBHOOK_MAX_ATTEMPTS');
+  });
+
+  it('defaults the credential minute window to 60 seconds and validates overrides', () => {
+    expect(assertValidEnvironment({ ...REQUIRED_ENV }).RATE_LIMIT_CREDENTIAL_MINUTE_WINDOW_SECONDS).toBe(60);
+    expect(
+      assertValidEnvironment({
+        ...REQUIRED_ENV,
+        RATE_LIMIT_CREDENTIAL_MINUTE_WINDOW_SECONDS: '30',
+      }).RATE_LIMIT_CREDENTIAL_MINUTE_WINDOW_SECONDS,
+    ).toBe(30);
+
+    const error = validationError({
+      ...REQUIRED_ENV,
+      RATE_LIMIT_CREDENTIAL_MINUTE_WINDOW_SECONDS: '0',
+    });
+    expect(error.issues.map((issue) => issue.key)).toContain(
+      'RATE_LIMIT_CREDENTIAL_MINUTE_WINDOW_SECONDS',
+    );
   });
 
   it('validates the shutdown grace period at startup, together with the other problems', () => {
@@ -247,5 +285,44 @@ describe('configuration documentation', () => {
     for (const key of Object.keys(REQUIRED_ENV)) {
       expect(example).toHaveProperty(key);
     }
+  });
+});
+
+describe('log redaction and budget alert configuration', () => {
+  it('parses LOG_REDACT_FIELDS into a trimmed, non-empty list', () => {
+    const env = assertValidEnvironment({
+      ...REQUIRED_ENV,
+      LOG_REDACT_FIELDS: ' accountNumber, payoutDetails ,, ',
+    });
+
+    expect(env.LOG_REDACT_FIELDS).toEqual(['accountNumber', 'payoutDetails']);
+  });
+
+  it('defaults LOG_REDACT_FIELDS to an empty list', () => {
+    expect(assertValidEnvironment(REQUIRED_ENV).LOG_REDACT_FIELDS).toEqual([]);
+  });
+
+  it('sorts and de-duplicates budget alert thresholds', () => {
+    const env = assertValidEnvironment({
+      ...REQUIRED_ENV,
+      BUDGET_ALERT_THRESHOLDS: '100, 80, 80',
+    });
+
+    expect(env.BUDGET_ALERT_THRESHOLDS).toEqual([80, 100]);
+  });
+
+  it('rejects a budget threshold above 100 instead of silently dropping it', () => {
+    const error = validationError({ ...REQUIRED_ENV, BUDGET_ALERT_THRESHOLDS: '80,150' });
+
+    expect(error.issues.map((issue) => issue.key)).toContain('BUDGET_ALERT_THRESHOLDS');
+  });
+
+  it('rejects a non-integer or zero budget threshold', () => {
+    expect(
+      validationError({ ...REQUIRED_ENV, BUDGET_ALERT_THRESHOLDS: '0' }).issues.map((i) => i.key),
+    ).toContain('BUDGET_ALERT_THRESHOLDS');
+    expect(
+      validationError({ ...REQUIRED_ENV, BUDGET_ALERT_THRESHOLDS: '79.5' }).issues.map((i) => i.key),
+    ).toContain('BUDGET_ALERT_THRESHOLDS');
   });
 });

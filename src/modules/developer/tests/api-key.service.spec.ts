@@ -25,10 +25,10 @@ describe('ApiKeyService', () => {
     findById: ReturnType<typeof vi.fn>;
     findByHash: ReturnType<typeof vi.fn>;
     findByPrefix: ReturnType<typeof vi.fn>;
-    findActiveByPrefix: ReturnType<typeof vi.fn>;
+    findAuthenticatableByPrefix: ReturnType<typeof vi.fn>;
     revoke: ReturnType<typeof vi.fn>;
     touchLastUsed: ReturnType<typeof vi.fn>;
-    markRotating: ReturnType<typeof vi.fn>;
+    rotate: ReturnType<typeof vi.fn>;
     update: ReturnType<typeof vi.fn>;
   };
 
@@ -45,10 +45,10 @@ describe('ApiKeyService', () => {
       findById: vi.fn(),
       findByHash: vi.fn(),
       findByPrefix: vi.fn(),
-      findActiveByPrefix: vi.fn(),
+      findAuthenticatableByPrefix: vi.fn(),
       revoke: vi.fn(),
       touchLastUsed: vi.fn(),
-      markRotating: vi.fn(),
+      rotate: vi.fn(),
       update: vi.fn(),
     };
     service = new ApiKeyService(
@@ -122,6 +122,49 @@ describe('ApiKeyService', () => {
           expiresAt: null,
           scopes: ['read'],
         }),
+      );
+    });
+
+    it('persists and returns the per-key minute and day rate-limit overrides', async () => {
+      repository.create.mockImplementation((data) =>
+        Promise.resolve({
+          id: 'key-quota',
+          ...data,
+          lastUsedAt: null,
+          revokedAt: null,
+          createdAt: new Date(),
+        }),
+      );
+
+      const result = await service.create(orgId, userId, {
+        name: 'Quota Key',
+        permissions: [],
+        allowedIps: [],
+        rateLimitPerMinute: 600,
+        rateLimitPerDay: 500000,
+      });
+
+      expect(repository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ rateLimitPerMinute: 600, rateLimitPerDay: 500000 }),
+      );
+      expect(result).toMatchObject({ rateLimitPerMinute: 600, rateLimitPerDay: 500000 });
+    });
+
+    it('stores null overrides when the caller sets none, keeping the configured defaults', async () => {
+      repository.create.mockImplementation((data) =>
+        Promise.resolve({
+          id: 'key-no-quota',
+          ...data,
+          lastUsedAt: null,
+          revokedAt: null,
+          createdAt: new Date(),
+        }),
+      );
+
+      await service.create(orgId, userId, { name: 'Plain Key', permissions: [], allowedIps: [] });
+
+      expect(repository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ rateLimitPerMinute: null, rateLimitPerDay: null }),
       );
     });
 
@@ -275,13 +318,13 @@ describe('ApiKeyService', () => {
         expiresAt: new Date(Date.now() + 86400000),
       };
       
-      repository.findActiveByPrefix.mockResolvedValue([mockKey]);
+      repository.findAuthenticatableByPrefix.mockResolvedValue([mockKey]);
       repository.touchLastUsed.mockResolvedValue({ ...mockKey, lastUsedAt: new Date() });
 
       const verified = await service.verify(rawSecret);
 
       expect(verified).toEqual(mockKey);
-      expect(repository.findActiveByPrefix).toHaveBeenCalledWith(rawSecret.slice(0, 14));
+      expect(repository.findAuthenticatableByPrefix).toHaveBeenCalledWith(rawSecret.slice(0, 14));
       expect(repository.touchLastUsed).toHaveBeenCalledWith('key-1');
     });
 
@@ -298,13 +341,13 @@ describe('ApiKeyService', () => {
         expiresAt: new Date(Date.now() + 86400000),
       };
       
-      repository.findActiveByPrefix.mockResolvedValue([mockKey]);
+      repository.findAuthenticatableByPrefix.mockResolvedValue([mockKey]);
       repository.touchLastUsed.mockResolvedValue({ ...mockKey, lastUsedAt: new Date() });
 
       const verified = await service.verify(rawSecret);
 
       expect(verified).toEqual(mockKey);
-      expect(repository.findActiveByPrefix).toHaveBeenCalledWith(rawSecret.slice(0, 14));
+      expect(repository.findAuthenticatableByPrefix).toHaveBeenCalledWith(rawSecret.slice(0, 14));
       expect(repository.touchLastUsed).toHaveBeenCalledWith('key-legacy');
     });
 
@@ -319,7 +362,7 @@ describe('ApiKeyService', () => {
         expiresAt: null,
       };
 
-      repository.findActiveByPrefix.mockResolvedValue([mockKey]);
+      repository.findAuthenticatableByPrefix.mockResolvedValue([mockKey]);
       repository.touchLastUsed.mockResolvedValue({ ...mockKey, lastUsedAt: new Date() });
 
       await service.verify(rawSecret);
@@ -338,7 +381,7 @@ describe('ApiKeyService', () => {
         expiresAt: null,
       };
 
-      repository.findActiveByPrefix.mockResolvedValue([mockKey]);
+      repository.findAuthenticatableByPrefix.mockResolvedValue([mockKey]);
 
       await expect(service.verify(rawSecret)).resolves.toBeNull();
       expect(repository.touchLastUsed).not.toHaveBeenCalled();
@@ -349,11 +392,11 @@ describe('ApiKeyService', () => {
       expect(await service.verify('   ')).toBeNull();
       expect(await service.verify(null as unknown as string)).toBeNull();
       expect(await service.verify(undefined as unknown as string)).toBeNull();
-      expect(repository.findActiveByPrefix).not.toHaveBeenCalled();
+      expect(repository.findAuthenticatableByPrefix).not.toHaveBeenCalled();
     });
 
     it('returns null when no keys found with matching prefix', async () => {
-      repository.findActiveByPrefix.mockResolvedValue([]);
+      repository.findAuthenticatableByPrefix.mockResolvedValue([]);
 
       const verified = await service.verify('ak_live_unknownkey');
 
@@ -365,7 +408,7 @@ describe('ApiKeyService', () => {
       const rawSecret = 'ak_live_abcdef1234567890abcdef1234567890abcdef12';
       const argonHash = await hashWithArgon2(rawSecret);
       
-      repository.findActiveByPrefix.mockResolvedValue([
+      repository.findAuthenticatableByPrefix.mockResolvedValue([
         {
           id: 'key-revoked',
           hashedKey: argonHash,
@@ -383,7 +426,7 @@ describe('ApiKeyService', () => {
       const rawSecret = 'ak_live_abcdef1234567890abcdef1234567890abcdef12';
       const argonHash = await hashWithArgon2(rawSecret);
       
-      repository.findActiveByPrefix.mockResolvedValue([
+      repository.findAuthenticatableByPrefix.mockResolvedValue([
         {
           id: 'key-expired',
           hashedKey: argonHash,
@@ -409,7 +452,7 @@ describe('ApiKeyService', () => {
         expiresAt: null,
       };
       
-      repository.findActiveByPrefix.mockResolvedValue([mockKey]);
+      repository.findAuthenticatableByPrefix.mockResolvedValue([mockKey]);
       repository.touchLastUsed.mockRejectedValue(new Error('DB connection busy'));
 
       const verified = await service.verify(rawSecret);
@@ -436,7 +479,7 @@ describe('ApiKeyService', () => {
         expiresAt: null,
       };
       
-      repository.findActiveByPrefix.mockResolvedValue([wrongKey, correctKey]);
+      repository.findAuthenticatableByPrefix.mockResolvedValue([wrongKey, correctKey]);
       repository.touchLastUsed.mockResolvedValue({ ...correctKey, lastUsedAt: new Date() });
 
       const verified = await service.verify(rawSecret);
@@ -445,7 +488,7 @@ describe('ApiKeyService', () => {
       expect(repository.touchLastUsed).toHaveBeenCalledWith('key-correct');
     });
 
-    it('authenticates rotating key during grace window (before expiresAt)', async () => {
+    it('authenticates a rotating key only until previousKeyExpiresAt', async () => {
       const rawSecret = 'ak_live_rotating1234567890abcdef1234567890abcdef';
       const argonHash = await hashWithArgon2(rawSecret);
 
@@ -455,10 +498,11 @@ describe('ApiKeyService', () => {
         hashedKey: argonHash,
         permissions: ['read'],
         revokedAt: null,
-        expiresAt: new Date(Date.now() + 3600 * 1000), // 1 hour into future
+        expiresAt: null,
+        previousKeyExpiresAt: new Date(Date.now() + 3600 * 1000),
       };
 
-      repository.findActiveByPrefix.mockResolvedValue([rotatingKey]);
+      repository.findAuthenticatableByPrefix.mockResolvedValue([rotatingKey]);
       repository.touchLastUsed.mockResolvedValue({ ...rotatingKey, lastUsedAt: new Date() });
 
       const verified = await service.verify(rawSecret);
@@ -467,7 +511,91 @@ describe('ApiKeyService', () => {
       expect(repository.touchLastUsed).toHaveBeenCalledWith('key-rotating');
     });
 
-    it('rejects rotating key after grace window expires', async () => {
+    it('authenticates both keys returned by rotation during the grace period', async () => {
+      const oldRawKey = 'ak_live_previous1234567890abcdef1234567890abcdef';
+      const oldKey = {
+        id: 'key-old',
+        organizationId: orgId,
+        createdById: userId,
+        name: 'Worker',
+        prefix: oldRawKey.slice(0, 14),
+        status: 'active',
+        scopes: ['read'],
+        permissions: [],
+        allowedIps: [],
+        expiresAt: null,
+        revokedAt: null,
+        rotatedAt: null,
+      };
+      repository.findById.mockResolvedValue(oldKey);
+      let rotatingPrevious: Record<string, unknown> = {};
+      let replacementKey: Record<string, unknown> = {};
+      repository.rotate.mockImplementation(
+        async (_organizationId, _id, _actorId, replacement, rotatedAt, previousKeyExpiresAt) => {
+          rotatingPrevious = {
+            ...oldKey,
+            status: 'rotating',
+            rotatedAt,
+            previousKeyExpiresAt,
+            hashedKey: await hashWithArgon2(oldRawKey),
+          };
+          replacementKey = {
+            id: 'key-new',
+            ...replacement,
+          };
+          return { previous: rotatingPrevious, replacement: replacementKey };
+        },
+      );
+
+      const rotated = await service.rotate(orgId, userId, 'key-old', {
+        gracePeriodSeconds: 3600,
+      });
+      repository.findAuthenticatableByPrefix.mockImplementation((prefix) =>
+        Promise.resolve(prefix === oldKey.prefix ? [rotatingPrevious] : [replacementKey]),
+      );
+
+      await expect(service.verify(oldRawKey)).resolves.toMatchObject({ id: 'key-old' });
+      await expect(service.verify(rotated.key)).resolves.toMatchObject({ id: 'key-new' });
+    });
+
+    it('authenticates only the replacement after the grace deadline', async () => {
+      const oldRawKey = 'ak_live_previous9876543210abcdef1234567890abcdef';
+      const newRawKey = 'ak_live_replacement9876543210abcdef1234567890abcdef';
+      const oldKey = {
+        id: 'key-old',
+        status: 'rotating',
+        hashedKey: await hashWithArgon2(oldRawKey),
+        revokedAt: null,
+        expiresAt: null,
+        previousKeyExpiresAt: new Date('2026-01-01T01:00:00.000Z'),
+      };
+      const newKey = {
+        id: 'key-new',
+        status: 'active',
+        hashedKey: await hashWithArgon2(newRawKey),
+        revokedAt: null,
+        expiresAt: null,
+        previousKeyExpiresAt: null,
+      };
+
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-01-01T00:59:59.000Z'));
+        repository.findAuthenticatableByPrefix.mockImplementation((prefix) =>
+          Promise.resolve(prefix === oldRawKey.slice(0, 14) ? [oldKey] : [newKey]),
+        );
+        await expect(service.verify(oldRawKey)).resolves.toMatchObject({ id: 'key-old' });
+        await expect(service.verify(newRawKey)).resolves.toMatchObject({ id: 'key-new' });
+
+        vi.setSystemTime(new Date('2026-01-01T01:00:00.000Z'));
+        await expect(service.verify(oldRawKey)).resolves.toBeNull();
+        await expect(service.verify(newRawKey)).resolves.toMatchObject({ id: 'key-new' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('rejects a rotating key after previousKeyExpiresAt, even if a stale lookup returns it', async () => {
       const rawSecret = 'ak_live_expired1234567890abcdef1234567890abcdef1';
       const argonHash = await hashWithArgon2(rawSecret);
 
@@ -477,10 +605,11 @@ describe('ApiKeyService', () => {
         hashedKey: argonHash,
         permissions: ['read'],
         revokedAt: null,
-        expiresAt: new Date(Date.now() - 1000), // expired 1s ago
+        expiresAt: null,
+        previousKeyExpiresAt: new Date(Date.now() - 1000),
       };
 
-      repository.findActiveByPrefix.mockResolvedValue([expiredKey]);
+      repository.findAuthenticatableByPrefix.mockResolvedValue([expiredKey]);
 
       const verified = await service.verify(rawSecret);
 
@@ -501,7 +630,7 @@ describe('ApiKeyService', () => {
         expiresAt: new Date(Date.now() + 3600 * 1000),
       };
 
-      repository.findActiveByPrefix.mockResolvedValue([revokedKey]);
+      repository.findAuthenticatableByPrefix.mockResolvedValue([revokedKey]);
 
       const verified = await service.verify(rawSecret);
 
@@ -511,7 +640,41 @@ describe('ApiKeyService', () => {
   });
 
   describe('rotate', () => {
-    it('rotates an active key, issues a replacement key once, marks old key rotating with expiresAt and logs audit', async () => {
+    it('copies the rate-limit overrides to the replacement key', async () => {
+      repository.findById.mockResolvedValue({
+        id: 'key-old',
+        organizationId: orgId,
+        createdById: userId,
+        name: 'Quota Worker',
+        prefix: 'ak_live_old123',
+        status: 'active',
+        scopes: ['read'],
+        permissions: [],
+        allowedIps: [],
+        rateLimitPerMinute: 600,
+        rateLimitPerDay: 500000,
+        expiresAt: null,
+        revokedAt: null,
+        rotatedAt: null,
+      });
+      repository.rotate.mockResolvedValue({
+        previous: { id: 'key-old', status: 'rotating' },
+        replacement: { id: 'key-new' },
+      });
+
+      await service.rotate(orgId, userId, 'key-old');
+
+      expect(repository.rotate).toHaveBeenCalledWith(
+        orgId,
+        'key-old',
+        userId,
+        expect.objectContaining({ rateLimitPerMinute: 600, rateLimitPerDay: 500000 }),
+        expect.any(Date),
+        expect.any(Date),
+      );
+    });
+
+    it('rotates an active key, stores only the replacement hash, and returns it once', async () => {
       const oldKey = {
         id: 'key-old',
         organizationId: orgId,
@@ -528,20 +691,23 @@ describe('ApiKeyService', () => {
       };
 
       repository.findById.mockResolvedValue(oldKey);
-      repository.create.mockImplementation((data) =>
-        Promise.resolve({
-          id: 'key-new',
-          ...data,
-          lastUsedAt: null,
-          revokedAt: null,
-          createdAt: new Date(),
+      repository.rotate.mockImplementation(
+        async (_organizationId, _id, _actorId, replacement) => ({
+          previous: {
+            ...oldKey,
+            status: 'rotating',
+            rotatedAt: new Date(),
+            previousKeyExpiresAt: new Date(),
+          },
+          replacement: {
+            id: 'key-new',
+            ...replacement,
+            lastUsedAt: null,
+            revokedAt: null,
+            createdAt: new Date(),
+          },
         }),
       );
-      repository.markRotating.mockResolvedValue({
-        ...oldKey,
-        status: 'rotating',
-        rotatedAt: new Date(),
-      });
 
       const result = await service.rotate(orgId, userId, 'key-old', {
         gracePeriodSeconds: 3600,
@@ -560,36 +726,85 @@ describe('ApiKeyService', () => {
       expect(result.lastFour).toBe(result.key.slice(-4));
       expect(result.previousKeyExpiresAt).toBeInstanceOf(Date);
 
-      // Verify old key was marked rotating
-      expect(repository.markRotating).toHaveBeenCalledWith(
+      expect(repository.rotate).toHaveBeenCalledWith(
+        orgId,
         'key-old',
-        expect.objectContaining({
-          status: 'rotating',
-          replacementId: 'key-new',
-          rotatedAt: expect.any(Date),
-          expiresAt: expect.any(Date),
-        }),
-      );
-
-      // Verify audit log recorded rotation
-      expect(auditService.record).toHaveBeenCalledWith(
+        userId,
         expect.objectContaining({
           organizationId: orgId,
-          userId,
-          action: 'API_KEY_ROTATED',
-          entity: 'ApiKey',
-          entityId: 'key-old',
-          oldValue: expect.objectContaining({
-            keyId: 'key-old',
-            prefix: 'ak_live_old123',
-            status: 'rotating',
-          }),
-          newValue: expect.objectContaining({
-            keyId: 'key-new',
-            status: 'active',
-          }),
+          createdById: userId,
+          hashedKey: expect.stringMatching(/\$argon2id\$/),
+          expiresAt: expect.any(Date),
         }),
+        expect.any(Date),
+        expect.any(Date),
       );
+      expect(auditService.record).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 when another actor attempts to rotate the key', async () => {
+      repository.findById.mockResolvedValue({
+        id: 'key-owned-by-another-actor',
+        organizationId: orgId,
+        createdById: 'different-user',
+        status: 'active',
+        revokedAt: null,
+        rotatedAt: null,
+        expiresAt: null,
+      });
+
+      await expect(service.rotate(orgId, userId, 'key-owned-by-another-actor')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(repository.rotate).not.toHaveBeenCalled();
+    });
+
+    it('uses the configured default grace period and preserves the original expiry', async () => {
+      const now = new Date('2026-01-01T00:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      try {
+        const keyExpiry = new Date('2026-01-10T00:00:00.000Z');
+        repository.findById.mockResolvedValue({
+          id: 'key-old',
+          organizationId: orgId,
+          createdById: userId,
+          name: 'Expiring Worker',
+          prefix: 'ak_live_old123',
+          status: 'active',
+          scopes: ['read'],
+          permissions: [],
+          allowedIps: [],
+          expiresAt: keyExpiry,
+          revokedAt: null,
+          rotatedAt: null,
+        });
+        repository.rotate.mockImplementation(
+          async (_organizationId, _id, _actorId, replacement) => ({
+            previous: { id: 'key-old', status: 'rotating' },
+            replacement: { id: 'key-new', ...replacement },
+          }),
+        );
+        const configuredService = new ApiKeyService(
+          repository as unknown as ApiKeyRepository,
+          auditService as never,
+          { apiKeyRotationGracePeriodSeconds: 3600 } as never,
+        );
+
+        const result = await configuredService.rotate(orgId, userId, 'key-old');
+
+        expect(repository.rotate).toHaveBeenCalledWith(
+          orgId,
+          'key-old',
+          userId,
+          expect.objectContaining({ expiresAt: keyExpiry }),
+          now,
+          new Date('2026-01-01T01:00:00.000Z'),
+        );
+        expect(result.expiresAt).toEqual(keyExpiry);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('throws NotFoundException if key does not exist', async () => {
@@ -603,6 +818,7 @@ describe('ApiKeyService', () => {
     it('throws ConflictException on repeated rotation of an already rotating key (double rotation)', async () => {
       repository.findById.mockResolvedValue({
         id: 'key-already-rotating',
+        createdById: userId,
         organizationId: orgId,
         status: 'rotating',
         rotatedAt: new Date(),
@@ -617,6 +833,7 @@ describe('ApiKeyService', () => {
     it('throws ConflictException on rotating an already revoked key', async () => {
       repository.findById.mockResolvedValue({
         id: 'key-revoked',
+        createdById: userId,
         organizationId: orgId,
         status: 'revoked',
         revokedAt: new Date(),
@@ -630,6 +847,7 @@ describe('ApiKeyService', () => {
     it('throws ConflictException on rotating an expired key', async () => {
       repository.findById.mockResolvedValue({
         id: 'key-expired',
+        createdById: userId,
         organizationId: orgId,
         status: 'active',
         revokedAt: null,
@@ -639,6 +857,60 @@ describe('ApiKeyService', () => {
       await expect(service.rotate(orgId, userId, 'key-expired')).rejects.toThrow(
         ConflictException,
       );
+    });
+
+    it('does not return a replacement if another rotation wins the atomic claim', async () => {
+      repository.findById.mockResolvedValue({
+        id: 'key-raced',
+        organizationId: orgId,
+        createdById: userId,
+        status: 'active',
+        revokedAt: null,
+        rotatedAt: null,
+        expiresAt: null,
+      });
+      repository.rotate.mockResolvedValue(null);
+
+      await expect(service.rotate(orgId, userId, 'key-raced')).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('does not revive a previous key when rotating its replacement', async () => {
+      const expiredPreviousRawKey = 'ak_live_expired1234567890abcdef1234567890abcdef';
+      const expiredPreviousKey = {
+        id: 'key-previous',
+        status: 'rotating',
+        hashedKey: await hashWithArgon2(expiredPreviousRawKey),
+        revokedAt: null,
+        expiresAt: null,
+        previousKeyExpiresAt: new Date(Date.now() - 1000),
+      };
+      repository.findAuthenticatableByPrefix.mockResolvedValue([expiredPreviousKey]);
+      await expect(service.verify(expiredPreviousRawKey)).resolves.toBeNull();
+
+      repository.findById.mockResolvedValue({
+        id: 'key-current',
+        organizationId: orgId,
+        createdById: userId,
+        name: 'Worker',
+        prefix: 'ak_live_current',
+        status: 'active',
+        scopes: ['read'],
+        permissions: [],
+        allowedIps: [],
+        expiresAt: null,
+        revokedAt: null,
+        rotatedAt: null,
+      });
+      repository.rotate.mockResolvedValue({
+        previous: { id: 'key-current', status: 'rotating' },
+        replacement: { id: 'key-next', expiresAt: null },
+      });
+
+      await service.rotate(orgId, userId, 'key-current');
+
+      await expect(service.verify(expiredPreviousRawKey)).resolves.toBeNull();
     });
   });
 });
