@@ -23,6 +23,11 @@ export interface IdempotentOptions {
    * Defaults to 2000.
    */
   waitForCompletionMs?: number;
+  /**
+   * Body schema used by the interceptor to normalize the payload before it is
+   * fingerprinted. Keep it in sync with the route-level Zod validation pipe.
+   */
+  bodySchema?: ZodTypeAny;
 }
 
 /**
@@ -32,11 +37,7 @@ export interface IdempotentOptions {
  * response for repeats with the same payload, answers 409 for repeats with a
  * different payload, and lets concurrent duplicates execute only once.
  * Endpoints without this decorator keep their previous behaviour.
-   * Body schema used by the interceptor to normalize the payload before it is
-   * fingerprinted. Keep it in sync with the route-level Zod validation pipe.
-   */
-  bodySchema?: ZodTypeAny;
-}
+ */
 
 /**
  * Opts a create handler into idempotent request handling. The header name and
